@@ -75,7 +75,7 @@ function tick(){
   const h = r.seg, hk = key(h);
   const eat = hk === key(food);
   const body = eat ? snake : snake.slice(0,-1);
-  if (body.some(s => key(s)===hk)){ alive = false; shake = 1; sfx.die(); best = Math.max(best,score); hud(); return; }
+  if (body.some(s => key(s)===hk)){ alive = false; shake = 1; sfx.die(); music.stop(); best = Math.max(best,score); hud(); return; }
   if (h.f !== snake[0].f) onFaceChange(snake[0].f, h.f);
   snake.unshift(h);
   if (eat){ score++; sfx.eat(); tickMs = Math.max(70, 170 - score*4); spawnFood(); }
@@ -86,7 +86,7 @@ function hud(){
   document.getElementById('hud').textContent = `SCORE ${score}   BEST ${best}   LEN ${snake.length}`;
   document.getElementById('msg').textContent =
     !alive ? `GAME OVER\nscore ${score}\n\npress SPACE to restart` :
-    !started ? `CUBE SNAKE\n\narrows / WASD to move\nedges wrap onto the next face` : '';
+    !started ? `CUBE SNAKE\n\narrows / WASD to move\nedges wrap onto the next face\nM = mute music` : '';
 }
 
 // ---------------------------------------------------------------- quaternion camera
@@ -150,13 +150,86 @@ const sfx = {
   die(){ tone(400,0.6,{type:'sawtooth',slide:0.15,vol:0.18}); tone(200,0.8,{type:'square',slide:0.2,vol:0.1,delay:0.05}); },
 };
 
+
+// ---------------------------------------------------------------- chiptune (SID-style: PWM pulse, 50Hz arps, filter sweep)
+const music = (() => {
+  const BPM = 140, STEP = 60/BPM/4, BARS = 8;
+  const mtof = m => 440*Math.pow(2,(m-69)/12);
+  const CHORD = [[57,60,64],[53,57,60],[60,64,67],[55,59,62],[57,60,64],[53,57,60],[50,53,57],[52,56,59]];
+  const ROOT  = [45,41,48,43,45,41,38,40];
+  const L = (...n) => n;  // [step, midi, lenSteps]
+  const LEAD = [
+    [L(0,69,2),L(2,72,2),L(4,76,2),L(6,81,2),L(8,79,2),L(10,76,2),L(12,72,2),L(14,74,2)],
+    [L(0,72,4),L(4,77,2),L(6,76,2),L(8,74,4),L(12,72,2),L(14,71,2)],
+    [L(0,76,2),L(2,79,2),L(4,84,4),L(8,83,2),L(10,79,2),L(12,76,4)],
+    [L(0,74,4),L(4,77,2),L(6,76,2),L(8,74,2),L(10,71,2),L(12,67,2),L(14,71,2)],
+    [L(0,69,2),L(2,72,2),L(4,76,2),L(6,81,2),L(8,79,2),L(10,76,2),L(12,72,2),L(14,74,2)],
+    [L(0,77,2),L(2,76,2),L(4,74,2),L(6,72,2),L(8,69,4),L(12,72,4)],
+    [L(0,74,4),L(4,77,2),L(6,81,2),L(8,77,2),L(10,74,2),L(12,69,4)],
+    [L(0,68,2),L(2,71,2),L(4,76,4),L(8,74,2),L(10,71,2),L(12,68,2),L(14,64,2)],
+  ];
+  const BASS = [0,3,6,8,10,12,14], BASS_OCT = {6:12,10:12,14:12};
+  let timer=null, step=0, nextT=0, master=null, filt=null, noise=null, muted=false;
+
+  function pulse(freq, t0, dur, o){
+    const g = actx.createGain();
+    g.gain.setValueAtTime(0,t0); g.gain.linearRampToValueAtTime(o.vol,t0+0.004);
+    g.gain.setValueAtTime(o.vol,t0+Math.max(0.004,dur-0.03)); g.gain.linearRampToValueAtTime(0,t0+dur);
+    const a=actx.createOscillator(), b=actx.createOscillator(); a.type=b.type='sawtooth';
+    a.frequency.setValueAtTime(freq,t0); b.frequency.setValueAtTime(freq,t0);
+    const inv=actx.createGain(); inv.gain.value=-1; const d=actx.createDelay(0.05);
+    d.delayTime.setValueAtTime(o.duty0/freq,t0); d.delayTime.linearRampToValueAtTime(o.duty1/freq,t0+dur);
+    a.connect(g); b.connect(inv); inv.connect(d); d.connect(g); g.connect(o.dest||filt);
+    if (o.vib){ const l=actx.createOscillator(), lg=actx.createGain(); l.frequency.value=5.5; lg.gain.value=freq*0.012;
+      l.connect(lg); lg.connect(a.frequency); lg.connect(b.frequency); l.start(t0); l.stop(t0+dur); }
+    a.start(t0); b.start(t0); a.stop(t0+dur+0.01); b.stop(t0+dur+0.01);
+    return [a,b];
+  }
+  function drum(t0, kind){
+    if (kind==='kick'){ const o=actx.createOscillator(), g=actx.createGain(); o.type='square';
+      o.frequency.setValueAtTime(160,t0); o.frequency.exponentialRampToValueAtTime(40,t0+0.09);
+      g.gain.setValueAtTime(0.25,t0); g.gain.exponentialRampToValueAtTime(0.001,t0+0.11);
+      o.connect(g).connect(master); o.start(t0); o.stop(t0+0.12); }
+    else { const src=actx.createBufferSource(); src.buffer=noise; const g=actx.createGain(), f=actx.createBiquadFilter();
+      const hat = kind==='hat'; f.type='highpass'; f.frequency.value = hat?7000:1800;
+      const dur = hat?0.03:0.11, v = hat?0.05:0.16;
+      g.gain.setValueAtTime(v,t0); g.gain.exponentialRampToValueAtTime(0.001,t0+dur);
+      src.connect(f).connect(g).connect(master); src.start(t0); src.stop(t0+dur+0.01); }
+  }
+  function play(gs, t0){
+    const bar = Math.floor(gs/16)%BARS, st = gs%16;
+    // arp chord voice: cycles chord notes at 50Hz within each 16th
+    const ch = CHORD[bar]; const [a,b] = pulse(mtof(ch[0]+12), t0, STEP*0.9, {vol:0.07, duty0:0.5, duty1:0.2});
+    for (let k=0;k<6;k++){ const f=mtof(ch[k%3]+12); a.frequency.setValueAtTime(f,t0+k/50); b.frequency.setValueAtTime(f,t0+k/50); }
+    if (BASS.includes(st)) pulse(mtof(ROOT[bar]+(BASS_OCT[st]||0)), t0, STEP*1.6, {vol:0.16, duty0:0.25, duty1:0.45});
+    for (const [ls,m,len] of LEAD[bar]) if (ls===st) pulse(mtof(m), t0, STEP*len*0.85, {vol:0.14, duty0:0.12, duty1:0.48, vib:true});
+    if (st===0||st===8) drum(t0,'kick'); if (st===4||st===12) drum(t0,'snare'); if (st&1) drum(t0,'hat');
+    if (st===0){ filt.frequency.cancelScheduledValues(t0); filt.frequency.setValueAtTime(bar%2?900:3200,t0); filt.frequency.exponentialRampToValueAtTime(bar%2?3200:900,t0+STEP*16); }
+  }
+  function sched(){ while (nextT < actx.currentTime+0.2){ play(step,nextT); step=(step+1)%(16*BARS); nextT+=STEP; } }
+  function start(){
+    if (timer || !actx) return;
+    if (!noise){ noise=actx.createBuffer(1,actx.sampleRate*0.5,actx.sampleRate); const d=noise.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1; }
+    master=actx.createGain(); master.gain.value = muted?0:0.4; master.connect(actx.destination);
+    filt=actx.createBiquadFilter(); filt.type='lowpass'; filt.Q.value=3; filt.frequency.value=2000; filt.connect(master);
+    step=0; nextT=actx.currentTime+0.4; timer=setInterval(sched,40);
+  }
+  function stop(){
+    if (!timer) return; clearInterval(timer); timer=null;
+    const m=master; m.gain.setTargetAtTime(0,actx.currentTime,0.08); setTimeout(()=>m.disconnect(),800);
+  }
+  function toggleMute(){ muted=!muted; if (master) master.gain.setTargetAtTime(muted?0:0.4,actx.currentTime,0.05); return muted; }
+  return {start,stop,toggleMute};
+})();
+
 // ---------------------------------------------------------------- input
 const keyMap = {ArrowUp:'up',KeyW:'up',ArrowDown:'down',KeyS:'down',ArrowLeft:'left',KeyA:'left',ArrowRight:'right',KeyD:'right'};
 addEventListener('keydown', e => {
   audioInit();
-  if (e.code==='Space' || e.code==='Enter'){ if(!alive) reset(); if(!started) sfx.start(); started = true; e.preventDefault(); return; }
+  if (e.code==='Space' || e.code==='Enter'){ if(!alive) reset(); if(!started){ sfx.start(); music.start(); } started = true; e.preventDefault(); return; }
+  if (e.code==='KeyM'){ music.toggleMute(); return; }
   const k = keyMap[e.code]; if (!k) return;
-  e.preventDefault(); if(!started) sfx.start(); started = true;
+  e.preventDefault(); if(!started){ sfx.start(); music.start(); } started = true;
   const R = quatToMat3(camQ);                   // rows: camera right / up / back in world space
   const want = k==='right'?R[0] : k==='left'?neg(R[0]) : k==='up'?R[1] : neg(R[1]);
   const F = FACES[snake[0].f];
