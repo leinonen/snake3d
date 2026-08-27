@@ -21,7 +21,8 @@
 'use strict';
 
 // ---------------------------------------------------------------- cube topology
-const N = 10, S = 2 / N;               // cells per face edge, cell size (cube spans [-1,1])
+const N = 10, S = 2 / N;
+const EDGE_SURGE = false;              // FOV/blur/aberration kick on face change               // cells per face edge, cell size (cube spans [-1,1])
 // u x v = n for every face; grid cell (i,j) lives at n + u*((i+.5)*S-1) + v*((j+.5)*S-1)
 const FACES = [
   { n:[ 0, 0, 1], u:[ 1,0, 0], v:[0,1, 0], tint:[0.10,0.16,0.22] },
@@ -104,7 +105,7 @@ function tick(){
   const rockHit = rocks.some(r => key(r)===hk), lavaHit = lavaPhase==='active' && h.f===lavaFace;
   if (rockHit) sfx.rock();
   if ((ghostT<=0 && body.some(s => key(s)===hk)) || rockHit || lavaHit){ alive = false; shake = 1; hitStop = 0.15; sfx.die(); music.stop(); best = Math.max(best,score); hud(); return; }
-  if (h.f !== snake[0].f){ onFaceChange(snake[0].f, h.f); surge = 1; }
+  if (h.f !== snake[0].f){ onFaceChange(snake[0].f, h.f); if (EDGE_SURGE) surge = 1; }
   snake.unshift(h);
   if (eat){
     combo = comboTimer>0 ? combo+1 : 1; comboTimer = 12; foodCount++;
