@@ -14,5 +14,5 @@ open:
 	@xdg-open http://localhost:$(PORT) 2>/dev/null || open http://localhost:$(PORT)
 
 deploy:
-	aws s3 sync . s3://$(BUCKET) --delete --exclude "*" --include "index.html"
+	aws s3 sync . s3://$(BUCKET) --delete --exclude "*" --include "index.html" --include "favicon*" --include "apple-touch-icon.png"
 	aws cloudfront create-invalidation --distribution-id $(DISTRIBUTION_ID) --paths "/*" --no-cli-pager --query 'Invalidation.Status' --output text
