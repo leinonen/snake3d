@@ -58,7 +58,7 @@ let snake, dir, pendingDir, food, score, alive, tickAcc, tickMs, shake, started,
 let combo, comboTimer, hitStop, surge, surgeT, flash, starT = 0, foodCount;
 let rocks, lavaFace, lavaPhase, lavaT, lavaCd;
 let powerup, ghostT, slowT, effectLbl = '';
-let noteTxt = '', noteT = 0;
+let noteTxt = '', noteT = 0, deathMsg = '';
 function note(txt, secs=1.5){ noteTxt = txt; noteT = secs; hud(); }
 function reset(){
   snake = [{f:0,i:5,j:5},{f:0,i:4,j:5},{f:0,i:3,j:5}];
@@ -103,7 +103,10 @@ function tick(){
   const body = eat ? snake : snake.slice(0,-1);
   const rockHit = rocks.some(r => key(r)===hk), lavaHit = lavaPhase==='active' && h.f===lavaFace;
   if (rockHit) sfx.rock();
-  if ((ghostT<=0 && body.some(s => key(s)===hk)) || rockHit || lavaHit){ alive = false; shake = 1; hitStop = 0.15; sfx.die(); music.stop(); best = Math.max(best,score); hud(); return; }
+  const selfHit = ghostT<=0 && body.some(s => key(s)===hk);
+  if (selfHit || rockHit || lavaHit){
+    deathMsg = rockHit ? 'you crashed into a rock' : lavaHit ? 'you ran onto a collapsing face' : 'you bit your own tail';
+    alive = false; shake = 1; hitStop = 0.15; sfx.die(); music.stop(); best = Math.max(best,score); hud(); return; }
   if (h.f !== snake[0].f){ onFaceChange(snake[0].f, h.f); }
   snake.unshift(h);
   if (eat){
@@ -128,7 +131,7 @@ function hudPop(){ const h=document.getElementById('hud'); h.classList.remove('p
 function hud(){
   document.getElementById('hud').textContent = `SCORE ${score}   BEST ${best}   LEN ${snake.length}` + (combo>1 ? `   x${combo}` : '') + (effectLbl ? `   ${effectLbl}` : '');
   document.getElementById('msg').textContent =
-    !alive ? `GAME OVER\nscore ${score}\n\npress SPACE to restart` :
+    !alive ? `GAME OVER\n${deathMsg}\nscore ${score}\n\npress SPACE to restart` :
     lavaPhase==='warn' ? `!! FACE COLLAPSING !!` :
     noteT > 0 ? noteTxt :
     !started ? `CUBE SNAKE\n\narrows / WASD to move\nedges wrap onto the next face\nM = mute music` : '';
