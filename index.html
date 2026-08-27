@@ -65,6 +65,7 @@ function reset(){
   combo = 0; comboTimer = 0; hitStop = 0; surge = 0; flash = 0; foodCount = 0;
   rocks = []; lavaFace = -1; lavaPhase = null; lavaT = 0; lavaCd = 12; music.duck(false);
   powerup = null; ghostT = 0; slowT = 0; effectLbl = ''; music.slow(false);
+  tiltX = 0; tiltY = 0;
   spawnFood();
   targetQ = faceQ(0);
   hud();
@@ -162,6 +163,7 @@ const qaxis = (ax,ang) => { const h=ang/2, sn=Math.sin(h); return [ax[0]*sn,ax[1
 const cross = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
 const faceQ = f => mat3ToQuat([FACES[f].u, FACES[f].v, FACES[f].n]);
 let camQ = faceQ(0), targetQ = faceQ(0);
+let tiltX = 0, tiltY = 0;                          // smoothed edge-peek tilt (radians)
 // on a face change, roll the target 90 degrees over the shared edge so screen-up stays continuous
 function onFaceChange(fOld, fNew){
   const a = FACES[fOld].n, b = FACES[fNew].n;
@@ -596,7 +598,13 @@ function frame(now){
 
   // camera: slerp toward the face the head is on
   camQ = slerp(camQ, targetQ, 1 - Math.exp(-dt*(5 + 6*surge)));
-  const R = quatToMat3(camQ);
+  // edge peek: tilt toward the edge the head is near so the neighbouring face is visible
+  { const hd = snake[0], F = FACES[hd.f], half = (N-1)/2;
+    const edge = o => { const x = (o-half)/half; return Math.sign(x)*Math.max(0, Math.abs(x)-0.25)/0.75; };
+    const TILT = 0.42, k = 1 - Math.exp(-dt*6);
+    tiltX += (edge(hd.i)*TILT - tiltX)*k; tiltY += (edge(hd.j)*TILT - tiltY)*k;
+    var viewQ = qmul(camQ, qmul(qaxis(F.v, -tiltX), qaxis(F.u, tiltY))); }
+  const R = quatToMat3(viewQ);
   // slight idle wobble
   const wob = alive ? 0.03 : 0.0;
   const view = [
