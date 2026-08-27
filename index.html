@@ -600,9 +600,12 @@ function frame(now){
   camQ = slerp(camQ, targetQ, 1 - Math.exp(-dt*(5 + 6*surge)));
   // edge peek: tilt toward the edge the head is near so the neighbouring face is visible
   { const hd = snake[0], F = FACES[hd.f], half = (N-1)/2;
-    const edge = o => { const x = (o-half)/half; return Math.sign(x)*Math.max(0, Math.abs(x)-0.25)/0.75; };
-    const TILT = 0.42, k = 1 - Math.exp(-dt*6);
-    tiltX += (edge(hd.i)*TILT - tiltX)*k; tiltY += (edge(hd.j)*TILT - tiltY)*k;
+    // sub-cell head position: advance along travel direction by tick progress
+    const frac = (alive && started) ? Math.min(1, tickAcc/(tickMs*(slowT>0?2:1))) : 0;
+    const hi = hd.i + dot(dir,F.u)*frac, hj = hd.j + dot(dir,F.v)*frac;
+    const edge = o => { const x = Math.max(-1, Math.min(1, (o-half)/half)); return Math.sign(x)*Math.max(0, Math.abs(x)-0.25)/0.75; };
+    const TILT = 0.42, k = 1 - Math.exp(-dt*5);
+    tiltX += (edge(hi)*TILT - tiltX)*k; tiltY += (edge(hj)*TILT - tiltY)*k;
     var viewQ = qmul(camQ, qmul(qaxis(F.v, -tiltX), qaxis(F.u, tiltY))); }
   const R = quatToMat3(viewQ);
   // slight idle wobble
