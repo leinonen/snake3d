@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cube Snake</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:"Courier New",monospace;user-select:none}
+  canvas{display:block;width:100vw;height:100vh}
+  #hud{position:fixed;top:14px;left:18px;color:#bff;font-size:18px;text-shadow:0 0 10px #0ff;pointer-events:none}
+  #msg{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:26px;
+       text-align:center;text-shadow:0 0 14px #f4f,0 0 30px #f4f;pointer-events:none;white-space:pre-line;line-height:1.6}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<div id="msg"></div>
+<script>
+(() => {
+'use strict';
+
+// ---------------------------------------------------------------- cube topology
+const N = 10, S = 2 / N;               // cells per face edge, cell size (cube spans [-1,1])
+// u x v = n for every face; grid cell (i,j) lives at n + u*((i+.5)*S-1) + v*((j+.5)*S-1)
+const FACES = [
+  { n:[ 0, 0, 1], u:[ 1,0, 0], v:[0,1, 0], tint:[0.10,0.16,0.22] },
+  { n:[ 0, 0,-1], u:[-1,0, 0], v:[0,1, 0], tint:[0.18,0.10,0.20] },
+  { n:[ 1, 0, 0], u:[ 0,0,-1], v:[0,1, 0], tint:[0.10,0.20,0.16] },
+  { n:[-1, 0, 0], u:[ 0,0, 1], v:[0,1, 0], tint:[0.20,0.16,0.10] },
+  { n:[ 0, 1, 0], u:[ 1,0, 0], v:[0,0,-1], tint:[0.12,0.12,0.22] },
+  { n:[ 0,-1, 0], u:[ 1,0, 0], v:[0,0, 1], tint:[0.20,0.12,0.12] },
+];
+const dot = (a,b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const add = (a,b,t=1) => [a[0]+b[0]*t, a[1]+b[1]*t, a[2]+b[2]*t];
+const neg = a => [-a[0],-a[1],-a[2]];
+const faceOfNormal = d => FACES.findIndex(f => dot(f.n,d) > 0.5);
+
+function cellPos(f,i,j){
+  const F = FACES[f];
+  return add(add(F.n, F.u, (i+0.5)*S-1), F.v, (j+0.5)*S-1);
+}
+// advance one cell along world direction d; wrap onto neighbouring face at edges
+function step(seg, d){
+  const F = FACES[seg.f];
+  const ni = seg.i + Math.round(dot(d,F.u)), nj = seg.j + Math.round(dot(d,F.v));
+  if (ni>=0 && ni<N && nj>=0 && nj<N) return { seg:{f:seg.f,i:ni,j:nj}, d };
+  const g = faceOfNormal(d), G = FACES[g], nd = neg(F.n);
+  const p = cellPos(seg.f, seg.i, seg.j);
+  const q = add(add(p, d, S/2), nd, S/2);       // walk over the edge and fold down
+  const gi = Math.round((dot(q,G.u)+1)/S - 0.5), gj = Math.round((dot(q,G.v)+1)/S - 0.5);
+  return { seg:{f:g,i:gi,j:gj}, d:nd };
+}
+const key = s => s.f*N*N + s.j*N + s.i;
+
+// ---------------------------------------------------------------- game state
+let snake, dir, pendingDir, food, score, alive, tickAcc, tickMs, shake, started, best = 0;
+function reset(){
+  snake = [{f:0,i:5,j:5},{f:0,i:4,j:5},{f:0,i:3,j:5}];
+  dir = [1,0,0]; pendingDir = null;
+  score = 0; alive = true; tickAcc = 0; tickMs = 170; shake = 0; started = false;
+  spawnFood();
+  hud();
+}
+function spawnFood(){
+  const occ = new Set(snake.map(key));
+  let f;
+  do { f = { f:(Math.random()*6)|0, i:(Math.random()*N)|0, j:(Math.random()*N)|0 }; } while (occ.has(key(f)));
+  food = f;
+}
+function tick(){
+  if (pendingDir){ dir = pendingDir; pendingDir = null; }
+  const r = step(snake[0], dir);
+  dir = r.d;
+  const h = r.seg, hk = key(h);
+  const eat = hk === key(food);
+  const body = eat ? snake : snake.slice(0,-1);
+  if (body.some(s => key(s)===hk)){ alive = false; shake = 1; best = Math.max(best,score); hud(); return; }
+  snake.unshift(h);
+  if (eat){ score++; tickMs = Math.max(70, 170 - score*4); spawnFood(); }
+  else snake.pop();
+  hud();
+}
+function hud(){
+  document.getElementById('hud').textContent = `SCORE ${score}   BEST ${best}   LEN ${snake.length}`;
+  document.getElementById('msg').textContent =
+    !alive ? `GAME OVER\nscore ${score}\n\npress SPACE to restart` :
+    !started ? `CUBE SNAKE\n\narrows / WASD to move\nedges wrap onto the next face` : '';
+}
+
+// ---------------------------------------------------------------- quaternion camera
+function mat3ToQuat(m){ // m rows = [u,v,n] (world -> view)
+  const t = m[0][0]+m[1][1]+m[2][2]; let q;
+  if (t>0){ const s=Math.sqrt(t+1)*2; q=[(m[2][1]-m[1][2])/s,(m[0][2]-m[2][0])/s,(m[1][0]-m[0][1])/s,s/4]; }
+  else if (m[0][0]>m[1][1] && m[0][0]>m[2][2]){ const s=Math.sqrt(1+m[0][0]-m[1][1]-m[2][2])*2; q=[s/4,(m[0][1]+m[1][0])/s,(m[0][2]+m[2][0])/s,(m[2][1]-m[1][2])/s]; }
+  else if (m[1][1]>m[2][2]){ const s=Math.sqrt(1+m[1][1]-m[0][0]-m[2][2])*2; q=[(m[0][1]+m[1][0])/s,s/4,(m[1][2]+m[2][1])/s,(m[0][2]-m[2][0])/s]; }
+  else { const s=Math.sqrt(1+m[2][2]-m[0][0]-m[1][1])*2; q=[(m[0][2]+m[2][0])/s,(m[1][2]+m[2][1])/s,s/4,(m[1][0]-m[0][1])/s]; }
+  return q;
+}
+function quatToMat3(q){
+  const [x,y,z,w]=q;
+  return [[1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w)],
+          [2*(x*y+z*w), 1-2*(x*x+z*z), 2*(y*z-x*w)],
+          [2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)]];
+}
+function slerp(a,b,t){
+  let d = a[0]*b[0]+a[1]*b[1]+a[2]*b[2]+a[3]*b[3];
+  if (d<0){ b=b.map(x=>-x); d=-d; }
+  if (d>0.9995){ const r=a.map((x,i)=>x+(b[i]-x)*t); const l=Math.hypot(...r); return r.map(x=>x/l); }
+  const th=Math.acos(d), s=Math.sin(th), wa=Math.sin((1-t)*th)/s, wb=Math.sin(t*th)/s;
+  return a.map((x,i)=>x*wa+b[i]*wb);
+}
+let camQ = mat3ToQuat([FACES[0].u, FACES[0].v, FACES[0].n]);
+
+// ---------------------------------------------------------------- input
+const keyMap = {ArrowUp:'up',KeyW:'up',ArrowDown:'down',KeyS:'down',ArrowLeft:'left',KeyA:'left',ArrowRight:'right',KeyD:'right'};
+addEventListener('keydown', e => {
+  if (e.code==='Space' || e.code==='Enter'){ if(!alive) reset(); started = true; e.preventDefault(); return; }
+  const k = keyMap[e.code]; if (!k) return;
+  e.preventDefault(); started = true;
+  const R = quatToMat3(camQ);                   // rows: camera right / up / back in world space
+  const want = k==='right'?R[0] : k==='left'?neg(R[0]) : k==='up'?R[1] : neg(R[1]);
+  const F = FACES[snake[0].f];
+  let bestD=null, bestV=-2;
+  for (const c of [F.u,neg(F.u),F.v,neg(F.v)]){ const v=dot(c,want); if(v>bestV){bestV=v;bestD=c;} }
+  if (dot(bestD, dir) < -0.5) return;           // no reversing
+  pendingDir = bestD;
+});
+
+// ---------------------------------------------------------------- webgl
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl', {antialias:false, alpha:false});
+if (!gl){ document.getElementById('msg').textContent='WebGL not available'; return; }
+
+function compile(type, src){
+  const s = gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+function program(vs,fs){
+  const p = gl.createProgram();
+  gl.attachShader(p,compile(gl.VERTEX_SHADER,vs)); gl.attachShader(p,compile(gl.FRAGMENT_SHADER,fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+
+const sceneProg = program(`
+  attribute vec3 aPos; attribute vec3 aCol; attribute vec3 aNrm; attribute vec2 aUv;
+  uniform mat4 uMVP; uniform mat3 uRot;
+  varying vec3 vCol; varying vec3 vN; varying vec2 vUv; varying vec3 vP;
+  void main(){ gl_Position = uMVP*vec4(aPos,1.0); vCol=aCol; vN=uRot*aNrm; vUv=aUv; vP=aPos; }
+`,`
+  precision mediump float;
+  varying vec3 vCol; varying vec3 vN; varying vec2 vUv; varying vec3 vP;
+  uniform float uTime;
+  void main(){
+    vec3 L = normalize(vec3(0.35,0.55,1.0));
+    vec3 n = normalize(vN);
+    float dif = 0.30 + 0.70*max(dot(n,L),0.0);
+    float spec = pow(max(dot(reflect(-L,n),vec3(0,0,1)),0.0),24.0)*0.25;
+    vec2 g = abs(vUv-0.5); float e = max(g.x,g.y);
+    float line = smoothstep(0.44,0.5,e);
+    float pulse = 0.5+0.5*sin(uTime*2.0 + (vP.x+vP.y+vP.z)*3.0);
+    vec3 lineCol = vec3(0.05,0.9,1.0)*(0.35+0.25*pulse);
+    vec3 c = mix(vCol, lineCol, line)*dif + spec;
+    gl_FragColor = vec4(c,1.0);
+  }
+`);
+const postProg = program(`
+  attribute vec2 aPos; varying vec2 vUv;
+  void main(){ vUv = aPos*0.5+0.5; gl_Position = vec4(aPos,0.0,1.0); }
+`,`
+  precision mediump float;
+  varying vec2 vUv; uniform sampler2D uTex; uniform vec2 uRes; uniform float uTime; uniform float uShake; uniform float uDead;
+  float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+  void main(){
+    vec2 cc = vUv-0.5;
+    cc.x *= uRes.x/uRes.y;
+    float r2 = dot(cc,cc);
+    vec2 uv = vUv + (vUv-0.5)*r2*0.12;                       // barrel distortion
+    uv += (vec2(hash(vec2(uTime,1.0)),hash(vec2(2.0,uTime)))-0.5)*0.03*uShake;
+    vec2 off = (vUv-0.5)*(0.008 + 0.03*uShake);              // chromatic aberration
+    vec4 g = texture2D(uTex,uv);
+    float r = texture2D(uTex,uv+off).r;
+    float b = texture2D(uTex,uv-off).b;
+    vec3 col = vec3(r,g.g,b);
+    vec3 bl = vec3(0.0); float tot = 0.0;                     // cheap bloom
+    for(int x=-3;x<=3;x++) for(int y=-3;y<=3;y++){
+      vec2 o = vec2(float(x),float(y))*3.0/uRes;
+      vec3 s = texture2D(uTex,uv+o).rgb;
+      float l = max(dot(s,vec3(0.299,0.587,0.114))-0.35,0.0);
+      float w = exp(-float(x*x+y*y)*0.12);
+      bl += s*l*w; tot += w;
+    }
+    col += bl/tot*2.2;
+    // background where nothing was drawn
+    vec3 bg = mix(vec3(0.01,0.01,0.04), vec3(0.06,0.01,0.10), vUv.y+0.2*sin(uTime*0.3));
+    float star = step(0.9975, hash(floor((uv+vec2(uTime*0.004,0.0))*uRes*0.5)));
+    bg += star*vec3(0.6,0.7,0.9)*(0.5+0.5*sin(uTime*3.0+uv.x*50.0));
+    col = mix(bg, col, g.a);
+    col *= 0.90 + 0.10*sin(uv.y*uRes.y*1.6 + uTime*4.0);      // scanlines
+    col *= 1.0 - 0.55*r2;                                      // vignette
+    col += (hash(vUv*uTime)-0.5)*0.03;                         // grain
+    col = mix(col, vec3(dot(col,vec3(0.3,0.59,0.11)))*vec3(1.2,0.5,0.6), uDead*0.7);
+    float inside = step(0.0,uv.x)*step(uv.x,1.0)*step(0.0,uv.y)*step(uv.y,1.0);
+    gl_FragColor = vec4(col*inside, 1.0);
+  }
+`);
+
+// scene buffers
+const vbo = gl.createBuffer();
+const quadVbo = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, quadVbo);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+
+// framebuffer
+let fbo, fboTex, fboDepth, W=0, H=0;
+function resize(){
+  const dpr = Math.min(devicePixelRatio||1, 2);
+  const w = Math.floor(innerWidth*dpr), h = Math.floor(innerHeight*dpr);
+  if (w===W && h===H) return;
+  W=w; H=h; canvas.width=W; canvas.height=H;
+  if (fbo){ gl.deleteFramebuffer(fbo); gl.deleteTexture(fboTex); gl.deleteRenderbuffer(fboDepth); }
+  fboTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,fboTex);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,W,H,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  fboDepth = gl.createRenderbuffer(); gl.bindRenderbuffer(gl.RENDERBUFFER,fboDepth);
+  gl.renderbufferStorage(gl.RENDERBUFFER,gl.DEPTH_COMPONENT16,W,H);
+  fbo = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER,fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,fboTex,0);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER,gl.DEPTH_ATTACHMENT,gl.RENDERBUFFER,fboDepth);
+  gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+}
+addEventListener('resize', resize);
+
+// ---------------------------------------------------------------- geometry
+const verts = [];  // interleaved: pos3 col3 nrm3 uv2
+function quad(p0,p1,p2,p3,col,nrm,uvs){
+  const tri = (a,b,c,ua,ub,uc) => { for (const [p,u] of [[a,ua],[b,ub],[c,uc]]) verts.push(p[0],p[1],p[2],col[0],col[1],col[2],nrm[0],nrm[1],nrm[2],u[0],u[1]); };
+  const uv = uvs || [[0.5,0.5],[0.5,0.5],[0.5,0.5],[0.5,0.5]];
+  tri(p0,p1,p2,uv[0],uv[1],uv[2]); tri(p0,p2,p3,uv[0],uv[2],uv[3]);
+}
+function cellQuad(f,i,j,col){
+  const F=FACES[f], c=cellPos(f,i,j), h=S/2;
+  const p = (a,b) => add(add(c,F.u,a*h),F.v,b*h);
+  quad(p(-1,-1),p(1,-1),p(1,1),p(-1,1),col,F.n,[[0,0],[1,0],[1,1],[0,1]]);
+}
+function box(f,i,j,inset,height,col){
+  const F=FACES[f], c=cellPos(f,i,j), h=S/2*(1-inset);
+  const lo = (a,b) => add(add(c,F.u,a*h),F.v,b*h);
+  const hi = (a,b) => add(lo(a,b),F.n,height);
+  quad(hi(-1,-1),hi(1,-1),hi(1,1),hi(-1,1),col,F.n);
+  const side = col.map(x=>x*0.7);
+  quad(lo(-1,-1),lo(1,-1),hi(1,-1),hi(-1,-1),side,neg(F.v));
+  quad(lo(1,1),lo(-1,1),hi(-1,1),hi(1,1),side,F.v);
+  quad(lo(1,-1),lo(1,1),hi(1,1),hi(1,-1),side,F.u);
+  quad(lo(-1,1),lo(-1,-1),hi(-1,-1),hi(-1,1),side,neg(F.u));
+}
+function buildScene(t){
+  verts.length = 0;
+  const occ = new Map(snake.map((s,k)=>[key(s),k]));
+  for (let f=0; f<6; f++){
+    const tint = FACES[f].tint;
+    for (let i=0;i<N;i++) for (let j=0;j<N;j++){
+      const chk = ((i+j)&1) ? 1.0 : 0.85;
+      cellQuad(f,i,j,[tint[0]*chk,tint[1]*chk,tint[2]*chk]);
+    }
+  }
+  const L = snake.length;
+  snake.forEach((s,k) => {
+    const g = k/Math.max(L-1,1);
+    const col = k===0 ? [0.6,1.0,0.7] : [0.1+0.15*g, 0.95-0.5*g, 0.35+0.4*g];
+    box(s.f,s.i,s.j, k===0?0.08:0.16, k===0?0.06:0.045, col);
+  });
+  const pulse = 0.5+0.5*Math.sin(t*6);
+  box(food.f,food.i,food.j, 0.25+0.1*pulse, 0.05+0.03*pulse, [1.0,0.25+0.2*pulse,0.35]);
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.DYNAMIC_DRAW);
+}
+
+// ---------------------------------------------------------------- matrices
+function perspective(fov,aspect,near,far){
+  const f = 1/Math.tan(fov/2), nf = 1/(near-far);
+  return [f/aspect,0,0,0, 0,f,0,0, 0,0,(far+near)*nf,-1, 0,0,2*far*near*nf,0];
+}
+function mul4(a,b){ const o=new Array(16).fill(0); for(let i=0;i<4;i++)for(let j=0;j<4;j++)for(let k=0;k<4;k++)o[j*4+i]+=a[k*4+i]*b[j*4+k]; return o; }
+
+// ---------------------------------------------------------------- render loop
+const A = {
+  pos: gl.getAttribLocation(sceneProg,'aPos'), col: gl.getAttribLocation(sceneProg,'aCol'),
+  nrm: gl.getAttribLocation(sceneProg,'aNrm'), uv: gl.getAttribLocation(sceneProg,'aUv'),
+  qpos: gl.getAttribLocation(postProg,'aPos'),
+};
+const U = {
+  mvp: gl.getUniformLocation(sceneProg,'uMVP'), rot: gl.getUniformLocation(sceneProg,'uRot'), stime: gl.getUniformLocation(sceneProg,'uTime'),
+  tex: gl.getUniformLocation(postProg,'uTex'), res: gl.getUniformLocation(postProg,'uRes'),
+  time: gl.getUniformLocation(postProg,'uTime'), shake: gl.getUniformLocation(postProg,'uShake'), dead: gl.getUniformLocation(postProg,'uDead'),
+};
+
+let last = performance.now();
+function frame(now){
+  const dt = Math.min((now-last)/1000, 0.1); last = now;
+  const t = now/1000;
+  resize();
+
+  if (alive && started){ tickAcc += dt*1000; while (tickAcc >= tickMs){ tickAcc -= tickMs; tick(); if(!alive) break; } }
+  shake = Math.max(0, shake - dt*1.5);
+
+  // camera: slerp toward the face the head is on
+  const F = FACES[snake[0].f];
+  const target = mat3ToQuat([F.u,F.v,F.n]);
+  camQ = slerp(camQ, target, 1 - Math.exp(-dt*5));
+  const R = quatToMat3(camQ);
+  // slight idle wobble
+  const wob = alive ? 0.03 : 0.0;
+  const view = [
+    R[0][0],R[1][0],R[2][0],0,
+    R[0][1],R[1][1],R[2][1],0,
+    R[0][2],R[1][2],R[2][2],0,
+    Math.sin(t*0.7)*wob, Math.cos(t*0.9)*wob, -4.3, 1 ];
+  const proj = perspective(38*Math.PI/180, W/H, 0.1, 20);
+  const mvp = mul4(proj, view);
+  const rot = [R[0][0],R[1][0],R[2][0], R[0][1],R[1][1],R[2][1], R[0][2],R[1][2],R[2][2]];
+
+  buildScene(t);
+
+  // pass 1: scene -> fbo
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.viewport(0,0,W,H);
+  gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
+  gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  gl.useProgram(sceneProg);
+  gl.uniformMatrix4fv(U.mvp,false,mvp);
+  gl.uniformMatrix3fv(U.rot,false,rot);
+  gl.uniform1f(U.stime,t);
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+  const st = 11*4;
+  gl.enableVertexAttribArray(A.pos); gl.vertexAttribPointer(A.pos,3,gl.FLOAT,false,st,0);
+  gl.enableVertexAttribArray(A.col); gl.vertexAttribPointer(A.col,3,gl.FLOAT,false,st,12);
+  gl.enableVertexAttribArray(A.nrm); gl.vertexAttribPointer(A.nrm,3,gl.FLOAT,false,st,24);
+  gl.enableVertexAttribArray(A.uv);  gl.vertexAttribPointer(A.uv,2,gl.FLOAT,false,st,36);
+  gl.drawArrays(gl.TRIANGLES, 0, verts.length/11);
+  gl.disableVertexAttribArray(A.pos); gl.disableVertexAttribArray(A.col);
+  gl.disableVertexAttribArray(A.nrm); gl.disableVertexAttribArray(A.uv);
+
+  // pass 2: post-process -> screen
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0,0,W,H);
+  gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
+  gl.useProgram(postProg);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, fboTex);
+  gl.uniform1i(U.tex,0); gl.uniform2f(U.res,W,H); gl.uniform1f(U.time,t);
+  gl.uniform1f(U.shake,shake); gl.uniform1f(U.dead, alive?0:1);
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadVbo);
+  gl.enableVertexAttribArray(A.qpos); gl.vertexAttribPointer(A.qpos,2,gl.FLOAT,false,0,0);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  gl.disableVertexAttribArray(A.qpos);
+
+  requestAnimationFrame(frame);
+}
+
+reset();
+resize();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
