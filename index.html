@@ -67,7 +67,7 @@ function reset(){
   combo = 0; comboTimer = 0; hitStop = 0; surge = 0; surgeT = 0; flash = 0; foodCount = 0;
   rocks = []; lavaFace = -1; lavaPhase = null; lavaT = 0; lavaCd = 12; music.duck(false);
   powerup = null; ghostT = 0; slowT = 0; effectLbl = ''; music.slow(false);
-  tiltX = 0; tiltY = 0; noteTxt = ''; noteT = 0;
+  tiltV = [0,0,0]; noteTxt = ''; noteT = 0;
   spawnFood();
   targetQ = faceQ(0);
   hud();
@@ -169,7 +169,7 @@ const qaxis = (ax,ang) => { const h=ang/2, sn=Math.sin(h); return [ax[0]*sn,ax[1
 const cross = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
 const faceQ = f => mat3ToQuat([FACES[f].u, FACES[f].v, FACES[f].n]);
 let camQ = faceQ(0), targetQ = faceQ(0);
-let tiltX = 0, tiltY = 0;                          // smoothed edge-peek tilt (radians)
+let tiltV = [0,0,0];                               // smoothed edge-peek tilt: world-space rotation vector
 // on a face change, roll the target 90 degrees over the shared edge so screen-up stays continuous
 function onFaceChange(fOld, fNew){
   const a = FACES[fOld].n, b = FACES[fNew].n;
@@ -654,8 +654,11 @@ function frame(now){
     // equals base + 45deg before it: the camera rolls over the edge continuously with the snake
     const edge = o => { const x = Math.max(-1, Math.min(1, (o-half)/(half+0.5))); const a = Math.max(0, Math.abs(x)-0.35)/0.65; return Math.sign(x)*a*a*(3-2*a); };
     const TILT = Math.PI/4, k = 1 - Math.exp(-dt*8);
-    tiltX += (edge(hi)*TILT - tiltX)*k; tiltY += (edge(hj)*TILT - tiltY)*k;
-    var viewQ = qmul(camQ, qmul(qaxis(F.v, -tiltX), qaxis(F.u, tiltY))); }
+    // target as a world-space rotation vector so it stays continuous when the face (and its axes) change
+    const tgt = add(add([0,0,0], F.v, -edge(hi)*TILT), F.u, edge(hj)*TILT);
+    tiltV = tiltV.map((x,q)=>x + (tgt[q]-x)*k);
+    const ang = Math.hypot(...tiltV);
+    var viewQ = ang > 1e-6 ? qmul(camQ, qaxis(tiltV.map(x=>x/ang), ang)) : camQ; }
   const R = quatToMat3(viewQ);
   // slight idle wobble
   const wob = alive ? 0.03 : 0.0;
