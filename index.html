@@ -644,14 +644,16 @@ function frame(now){
   }
 
   // camera: slerp toward the face the head is on
-  camQ = slerp(camQ, targetQ, 1 - Math.exp(-dt*(5 + 6*surge)));
+  camQ = slerp(camQ, targetQ, 1 - Math.exp(-dt*8));
   // edge peek: tilt toward the edge the head is near so the neighbouring face is visible
   { const hd = snake[0], F = FACES[hd.f], half = (N-1)/2;
     // sub-cell head position: advance along travel direction by tick progress
     const frac = (alive && started) ? Math.min(1, tickAcc/(tickMs*(slowT>0?2:1))) : 0;
     const hi = hd.i + dot(dir,F.u)*frac, hj = hd.j + dot(dir,F.v)*frac;
-    const edge = o => { const x = Math.max(-1, Math.min(1, (o-half)/half)); return Math.sign(x)*Math.max(0, Math.abs(x)-0.25)/0.75; };
-    const TILT = 0.42, k = 1 - Math.exp(-dt*5);
+    // tilt reaches 45deg exactly at the cube edge, so base(+90deg) + tilt(-45deg) after crossing
+    // equals base + 45deg before it: the camera rolls over the edge continuously with the snake
+    const edge = o => { const x = Math.max(-1, Math.min(1, (o-half)/(half+0.5))); const a = Math.max(0, Math.abs(x)-0.35)/0.65; return Math.sign(x)*a*a*(3-2*a); };
+    const TILT = Math.PI/4, k = 1 - Math.exp(-dt*8);
     tiltX += (edge(hi)*TILT - tiltX)*k; tiltY += (edge(hj)*TILT - tiltY)*k;
     var viewQ = qmul(camQ, qmul(qaxis(F.v, -tiltX), qaxis(F.u, tiltY))); }
   const R = quatToMat3(viewQ);
