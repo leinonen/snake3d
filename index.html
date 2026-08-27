@@ -21,8 +21,7 @@
 'use strict';
 
 // ---------------------------------------------------------------- cube topology
-const N = 10, S = 2 / N;
-const EDGE_SURGE = false;              // FOV/blur/aberration kick on face change               // cells per face edge, cell size (cube spans [-1,1])
+const N = 10, S = 2 / N;               // cells per face edge, cell size (cube spans [-1,1])
 // u x v = n for every face; grid cell (i,j) lives at n + u*((i+.5)*S-1) + v*((j+.5)*S-1)
 const FACES = [
   { n:[ 0, 0, 1], u:[ 1,0, 0], v:[0,1, 0], tint:[0.10,0.16,0.22] },
@@ -56,7 +55,7 @@ const key = s => s.f*N*N + s.j*N + s.i;
 
 // ---------------------------------------------------------------- game state
 let snake, dir, pendingDir, food, score, alive, tickAcc, tickMs, shake, started, best = 0;
-let combo, comboTimer, hitStop, surge, flash, starT = 0, foodCount;
+let combo, comboTimer, hitStop, surge, surgeT, flash, starT = 0, foodCount;
 let rocks, lavaFace, lavaPhase, lavaT, lavaCd;
 let powerup, ghostT, slowT, effectLbl = '';
 let noteTxt = '', noteT = 0;
@@ -65,7 +64,7 @@ function reset(){
   snake = [{f:0,i:5,j:5},{f:0,i:4,j:5},{f:0,i:3,j:5}];
   dir = [1,0,0]; pendingDir = null;
   score = 0; alive = true; tickAcc = 0; tickMs = 170; shake = 0; started = false;
-  combo = 0; comboTimer = 0; hitStop = 0; surge = 0; flash = 0; foodCount = 0;
+  combo = 0; comboTimer = 0; hitStop = 0; surge = 0; surgeT = 0; flash = 0; foodCount = 0;
   rocks = []; lavaFace = -1; lavaPhase = null; lavaT = 0; lavaCd = 12; music.duck(false);
   powerup = null; ghostT = 0; slowT = 0; effectLbl = ''; music.slow(false);
   tiltX = 0; tiltY = 0; noteTxt = ''; noteT = 0;
@@ -105,7 +104,7 @@ function tick(){
   const rockHit = rocks.some(r => key(r)===hk), lavaHit = lavaPhase==='active' && h.f===lavaFace;
   if (rockHit) sfx.rock();
   if ((ghostT<=0 && body.some(s => key(s)===hk)) || rockHit || lavaHit){ alive = false; shake = 1; hitStop = 0.15; sfx.die(); music.stop(); best = Math.max(best,score); hud(); return; }
-  if (h.f !== snake[0].f){ onFaceChange(snake[0].f, h.f); if (EDGE_SURGE) surge = 1; }
+  if (h.f !== snake[0].f){ onFaceChange(snake[0].f, h.f); }
   snake.unshift(h);
   if (eat){
     combo = comboTimer>0 ? combo+1 : 1; comboTimer = 12; foodCount++;
@@ -119,9 +118,9 @@ function tick(){
   else snake.pop();
   if (powerup && key(powerup)===hk){
     const k = powerup.kind; powerup = null; sfx.power(); hudPop();
-    if (k==='ghost') ghostT = 5;
-    else if (k==='shrink'){ snake.length = Math.max(3, Math.ceil(snake.length*0.7)); sfx.pop(); }
-    else { slowT = 4; music.slow(true); }
+    if (k==='ghost'){ ghostT = 5; surgeT = 5; }
+    else if (k==='shrink'){ snake.length = Math.max(3, Math.ceil(snake.length*0.7)); sfx.pop(); surgeT = 1; }
+    else { slowT = 4; music.slow(true); surgeT = 4; }
   }
   hud();
 }
@@ -603,7 +602,8 @@ function frame(now){
   if (hitStop > 0) hitStop -= dt;
   else if (alive && started){ tickAcc += dt*1000; const tm = tickMs*(slowT>0?2:1); while (tickAcc >= tm){ tickAcc -= tm; tick(); if(!alive) break; } }
   shake = Math.max(0, shake - dt*1.5);
-  surge = Math.max(0, surge - dt*4);
+  if (surgeT > 0 && alive){ surgeT -= dt; surge = Math.min(1, surge + dt*4); }   // power-up aura
+  else surge = Math.max(0, surge - dt*2);
   flash = Math.max(0, flash - dt*8);
   starT += dt*(1 + 1.2*surge);
   if (alive && started && hitStop <= 0){
