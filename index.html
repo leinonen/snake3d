@@ -6,7 +6,8 @@
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:"Courier New",monospace;user-select:none}
   canvas{display:block;width:100vw;height:100vh}
-  #hud{position:fixed;top:18px;left:24px;color:#bff;font-size:34px;font-weight:bold;letter-spacing:2px;text-shadow:0 0 10px #0ff;pointer-events:none}
+  #hud{position:fixed;top:18px;left:24px;color:#bff;font-size:34px;font-weight:bold;letter-spacing:2px;text-shadow:0 0 10px #0ff;pointer-events:none;transform-origin:left top;transition:transform .25s ease-out,color .25s}
+  #hud.pop{transform:scale(1.25);color:#fff;transition:none}
   #msg{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:42px;
        text-align:center;text-shadow:0 0 14px #f4f,0 0 30px #f4f;pointer-events:none;white-space:pre-line;line-height:1.6}
 </style>
@@ -54,10 +55,12 @@ const key = s => s.f*N*N + s.j*N + s.i;
 
 // ---------------------------------------------------------------- game state
 let snake, dir, pendingDir, food, score, alive, tickAcc, tickMs, shake, started, best = 0;
+let combo, comboTimer, hitStop, surge, flash, starT = 0, foodCount;
 function reset(){
   snake = [{f:0,i:5,j:5},{f:0,i:4,j:5},{f:0,i:3,j:5}];
   dir = [1,0,0]; pendingDir = null;
   score = 0; alive = true; tickAcc = 0; tickMs = 170; shake = 0; started = false;
+  combo = 0; comboTimer = 0; hitStop = 0; surge = 0; flash = 0; foodCount = 0;
   spawnFood();
   targetQ = faceQ(0);
   hud();
@@ -70,20 +73,29 @@ function spawnFood(){
 }
 function tick(){
   if (pendingDir){ dir = pendingDir; pendingDir = null; }
+  if (comboTimer>0 && --comboTimer===0 && combo>1){ combo = 0; sfx.comboLost(); hud(); }
   const r = step(snake[0], dir);
   dir = r.d;
   const h = r.seg, hk = key(h);
   const eat = hk === key(food);
   const body = eat ? snake : snake.slice(0,-1);
-  if (body.some(s => key(s)===hk)){ alive = false; shake = 1; sfx.die(); music.stop(); best = Math.max(best,score); hud(); return; }
-  if (h.f !== snake[0].f) onFaceChange(snake[0].f, h.f);
+  if (body.some(s => key(s)===hk)){ alive = false; shake = 1; hitStop = 0.15; sfx.die(); music.stop(); best = Math.max(best,score); hud(); return; }
+  if (h.f !== snake[0].f){ onFaceChange(snake[0].f, h.f); surge = 1; }
   snake.unshift(h);
-  if (eat){ score++; sfx.eat(); tickMs = Math.max(70, 170 - score*4); spawnFood(); }
+  if (eat){
+    combo = comboTimer>0 ? combo+1 : 1; comboTimer = 12; foodCount++;
+    score += combo; sfx.eat(combo);
+    hitStop = 0.04; shake = Math.max(shake, 0.25); flash = 1; hudPop();
+    music.setIntensity(Math.min(3, Math.floor(score/5))); music.setCombo(combo);
+    if (foodCount%5===0) music.fill();
+    tickMs = Math.max(70, 170 - foodCount*4); spawnFood();
+  }
   else snake.pop();
   hud();
 }
+function hudPop(){ const h=document.getElementById('hud'); h.classList.remove('pop'); void h.offsetWidth; h.classList.add('pop'); }
 function hud(){
-  document.getElementById('hud').textContent = `SCORE ${score}   BEST ${best}   LEN ${snake.length}`;
+  document.getElementById('hud').textContent = `SCORE ${score}   BEST ${best}   LEN ${snake.length}` + (combo>1 ? `   x${combo}` : '');
   document.getElementById('msg').textContent =
     !alive ? `GAME OVER\nscore ${score}\n\npress SPACE to restart` :
     !started ? `CUBE SNAKE\n\narrows / WASD to move\nedges wrap onto the next face\nM = mute music` : '';
@@ -146,14 +158,16 @@ function tone(freq, dur, {type='square', vol=0.12, slide=0, delay=0} = {}){
 }
 const sfx = {
   start(){ [261.6,329.6,392,523.3].forEach((f,i)=>tone(f,0.18,{delay:i*0.08,type:'triangle',vol:0.15})); tone(1046.5,0.35,{delay:0.32,type:'sine',vol:0.1}); },
-  eat(){ tone(660,0.08,{slide:2.0,vol:0.1}); tone(990,0.1,{delay:0.05,type:'triangle',vol:0.08}); },
+  eat(c=1){ const m=Math.pow(2,(c-1)/12); tone(660*m,0.08,{slide:2.0,vol:0.1}); tone(990*m,0.1,{delay:0.05,type:'triangle',vol:0.08}); },
+  comboLost(){ tone(500,0.18,{type:'triangle',slide:0.5,vol:0.07}); },
   die(){ tone(400,0.6,{type:'sawtooth',slide:0.15,vol:0.18}); tone(200,0.8,{type:'square',slide:0.2,vol:0.1,delay:0.05}); },
 };
 
 
 // ---------------------------------------------------------------- chiptune (SID-style: PWM pulse, 50Hz arps, filter sweep)
 const music = (() => {
-  const BPM = 140, STEP = 60/BPM/4, BARS = 8;
+  let bpm = 140, STEP = 60/bpm/4; const BARS = 8;
+  let level = 0, comboLvl = 0, fillSteps = 0;
   const mtof = m => 440*Math.pow(2,(m-69)/12);
   const CHORD = [[57,60,64],[53,57,60],[60,64,67],[55,59,62],[57,60,64],[53,57,60],[50,53,57],[52,56,59]];
   const ROOT  = [45,41,48,43,45,41,38,40];
@@ -199,12 +213,18 @@ const music = (() => {
   function play(gs, t0){
     const bar = Math.floor(gs/16)%BARS, st = gs%16;
     // arp chord voice: cycles chord notes at 50Hz within each 16th
-    const ch = CHORD[bar]; const [a,b] = pulse(mtof(ch[0]+12), t0, STEP*0.9, {vol:0.07, duty0:0.5, duty1:0.2});
-    for (let k=0;k<6;k++){ const f=mtof(ch[k%3]+12); a.frequency.setValueAtTime(f,t0+k/50); b.frequency.setValueAtTime(f,t0+k/50); }
+    const ch = CHORD[bar];
+    if (level>=1){ const [a,b] = pulse(mtof(ch[0]+12), t0, STEP*0.9, {vol:0.07, duty0:0.5, duty1:0.2});
+      for (let k=0;k<6;k++){ const f=mtof(ch[k%3]+12); a.frequency.setValueAtTime(f,t0+k/50); b.frequency.setValueAtTime(f,t0+k/50); } }
     if (BASS.includes(st)) pulse(mtof(ROOT[bar]+(BASS_OCT[st]||0)), t0, STEP*1.6, {vol:0.16, duty0:0.25, duty1:0.45});
-    for (const [ls,m,len] of LEAD[bar]) if (ls===st) pulse(mtof(m), t0, STEP*len*0.85, {vol:0.14, duty0:0.12, duty1:0.48, vib:true});
-    if (st===0||st===8) drum(t0,'kick'); if (st===4||st===12) drum(t0,'snare'); if (st&1) drum(t0,'hat');
-    if (st===0){ filt.frequency.cancelScheduledValues(t0); filt.frequency.setValueAtTime(bar%2?900:3200,t0); filt.frequency.exponentialRampToValueAtTime(bar%2?3200:900,t0+STEP*16); }
+    for (const [ls,m,len] of LEAD[bar]) if (ls===st){
+      pulse(mtof(m), t0, STEP*len*0.85, {vol:0.14, duty0:0.12, duty1:0.48, vib:true});
+      if (level>=3) pulse(mtof(m+12), t0, STEP*len*0.6, {vol:0.05, duty0:0.3, duty1:0.1});
+    }
+    if (fillSteps>0){ fillSteps--; drum(t0,'snare'); drum(t0,'kick'); }
+    else { if (st===0||st===8) drum(t0,'kick'); if ((st===4||st===12) && level>=2) drum(t0,'snare'); if ((st&1) && level>=1) drum(t0,'hat'); }
+    if (st===0){ const lo=900+400*comboLvl, hi=3200+400*comboLvl; filt.frequency.cancelScheduledValues(t0); filt.frequency.setValueAtTime(bar%2?lo:hi,t0); filt.frequency.exponentialRampToValueAtTime(bar%2?hi:lo,t0+STEP*16);
+      STEP = 60/bpm/4; }
   }
   function sched(){ while (nextT < actx.currentTime+0.2){ play(step,nextT); step=(step+1)%(16*BARS); nextT+=STEP; } }
   function start(){
@@ -212,14 +232,17 @@ const music = (() => {
     if (!noise){ noise=actx.createBuffer(1,actx.sampleRate*0.5,actx.sampleRate); const d=noise.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1; }
     master=actx.createGain(); master.gain.value = muted?0:0.4; master.connect(actx.destination);
     filt=actx.createBiquadFilter(); filt.type='lowpass'; filt.Q.value=3; filt.frequency.value=2000; filt.connect(master);
-    step=0; nextT=actx.currentTime+0.4; timer=setInterval(sched,40);
+    step=0; level=0; comboLvl=0; fillSteps=0; bpm=140; STEP=60/bpm/4; nextT=actx.currentTime+0.4; timer=setInterval(sched,40);
   }
   function stop(){
     if (!timer) return; clearInterval(timer); timer=null;
     const m=master; m.gain.setTargetAtTime(0,actx.currentTime,0.08); setTimeout(()=>m.disconnect(),800);
   }
   function toggleMute(){ muted=!muted; if (master) master.gain.setTargetAtTime(muted?0:0.4,actx.currentTime,0.05); return muted; }
-  return {start,stop,toggleMute};
+  function setIntensity(l){ level=l; bpm = 140 + 4*l; }
+  function setCombo(c){ comboLvl = Math.min(c,6); }
+  function fill(){ fillSteps = 4; }
+  return {start,stop,toggleMute,setIntensity,setCombo,fill};
 })();
 
 // ---------------------------------------------------------------- input
@@ -284,7 +307,7 @@ const postProg = program(`
   void main(){ vUv = aPos*0.5+0.5; gl_Position = vec4(aPos,0.0,1.0); }
 `,`
   precision mediump float;
-  varying vec2 vUv; uniform sampler2D uTex; uniform vec2 uRes; uniform float uTime; uniform float uShake; uniform float uDead;
+  varying vec2 vUv; uniform sampler2D uTex; uniform vec2 uRes; uniform float uTime; uniform float uShake; uniform float uDead; uniform float uSurge; uniform float uStar;
   float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
   // warp starfield: 8 depth slices fly toward the camera; each star projected by 1/z
   vec3 starfield(vec2 p, float t){
@@ -315,8 +338,12 @@ const postProg = program(`
     float r2 = dot(cc,cc);
     vec2 uv = vUv + (vUv-0.5)*r2*0.12;                       // barrel distortion
     uv += (vec2(hash(vec2(uTime,1.0)),hash(vec2(2.0,uTime)))-0.5)*0.03*uShake;
-    vec2 off = (vUv-0.5)*(0.008 + 0.03*uShake);              // chromatic aberration
+    vec2 off = (vUv-0.5)*(0.008 + 0.03*uShake + 0.02*uSurge);  // chromatic aberration
     vec4 g = texture2D(uTex,uv);
+    if (uSurge > 0.001){                                       // radial blur on edge surge
+      vec2 dir = (0.5-uv)*0.06*uSurge;
+      g = (g + texture2D(uTex,uv+dir) + texture2D(uTex,uv+dir*2.0) + texture2D(uTex,uv+dir*3.0) + texture2D(uTex,uv+dir*4.0))/5.0;
+    }
     float r = texture2D(uTex,uv+off).r;
     float b = texture2D(uTex,uv-off).b;
     vec3 col = vec3(r,g.g,b);
@@ -331,7 +358,7 @@ const postProg = program(`
     col += bl/tot*2.2;
     // background where nothing was drawn
     vec3 bg = mix(vec3(0.01,0.01,0.04), vec3(0.06,0.01,0.10), vUv.y+0.2*sin(uTime*0.3));
-    bg += starfield(cc, uTime);
+    bg += starfield(cc, uStar)*(1.0+uSurge);
     col = mix(bg, col, g.a);
     col *= 0.90 + 0.10*sin(uv.y*uRes.y*1.6 + uTime*4.0);      // scanlines
     col *= 1.0 - 0.55*r2;                                      // vignette
@@ -446,7 +473,7 @@ function buildScene(t){
       const [dx,dy,e] = localDir(s,o,H);
       if (dx===1) nb.px=e; else if (dx===-1) nb.nx=e; else if (dy===1) nb.py=e; else if (dy===-1) nb.ny=e;
     }
-    blob(s.f,s.i,s.j,nb,inset,H,col);
+    blob(s.f,s.i,s.j,nb, k===0 ? inset*(1-0.5*flash) : inset, k===0 ? H*(1+0.5*flash) : H, col);
   });
   // eyes
   { const s=snake[0], F=FACES[s.f], c=cellPos(s.f,s.i,s.j), h=S/2;
@@ -480,6 +507,7 @@ const U = {
   mvp: gl.getUniformLocation(sceneProg,'uMVP'), rot: gl.getUniformLocation(sceneProg,'uRot'), stime: gl.getUniformLocation(sceneProg,'uTime'),
   tex: gl.getUniformLocation(postProg,'uTex'), res: gl.getUniformLocation(postProg,'uRes'),
   time: gl.getUniformLocation(postProg,'uTime'), shake: gl.getUniformLocation(postProg,'uShake'), dead: gl.getUniformLocation(postProg,'uDead'),
+  surge: gl.getUniformLocation(postProg,'uSurge'), star: gl.getUniformLocation(postProg,'uStar'),
 };
 
 let last = performance.now();
@@ -488,11 +516,15 @@ function frame(now){
   const t = now/1000;
   resize();
 
-  if (alive && started){ tickAcc += dt*1000; while (tickAcc >= tickMs){ tickAcc -= tickMs; tick(); if(!alive) break; } }
+  if (hitStop > 0) hitStop -= dt;
+  else if (alive && started){ tickAcc += dt*1000; while (tickAcc >= tickMs){ tickAcc -= tickMs; tick(); if(!alive) break; } }
   shake = Math.max(0, shake - dt*1.5);
+  surge = Math.max(0, surge - dt*3);
+  flash = Math.max(0, flash - dt*8);
+  starT += dt*(1 + 2.5*surge);
 
   // camera: slerp toward the face the head is on
-  camQ = slerp(camQ, targetQ, 1 - Math.exp(-dt*5));
+  camQ = slerp(camQ, targetQ, 1 - Math.exp(-dt*(5 + 6*surge)));
   const R = quatToMat3(camQ);
   // slight idle wobble
   const wob = alive ? 0.03 : 0.0;
@@ -501,7 +533,7 @@ function frame(now){
     R[0][1],R[1][1],R[2][1],0,
     R[0][2],R[1][2],R[2][2],0,
     Math.sin(t*0.7)*wob, Math.cos(t*0.9)*wob, -4.3, 1 ];
-  const proj = perspective(38*Math.PI/180, W/H, 0.1, 20);
+  const proj = perspective((38 + 10*surge)*Math.PI/180, W/H, 0.1, 20);
   const mvp = mul4(proj, view);
   const rot = [R[0][0],R[1][0],R[2][0], R[0][1],R[1][1],R[2][1], R[0][2],R[1][2],R[2][2]];
 
@@ -533,7 +565,7 @@ function frame(now){
   gl.useProgram(postProg);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, fboTex);
   gl.uniform1i(U.tex,0); gl.uniform2f(U.res,W,H); gl.uniform1f(U.time,t);
-  gl.uniform1f(U.shake,shake); gl.uniform1f(U.dead, alive?0:1);
+  gl.uniform1f(U.shake,shake); gl.uniform1f(U.dead, alive?0:1); gl.uniform1f(U.surge,surge); gl.uniform1f(U.star,starT);
   gl.bindBuffer(gl.ARRAY_BUFFER, quadVbo);
   gl.enableVertexAttribArray(A.qpos); gl.vertexAttribPointer(A.qpos,2,gl.FLOAT,false,0,0);
   gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
