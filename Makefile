@@ -1,9 +1,18 @@
 PORT ?= 8000
+# Static site on S3 website bucket + CloudFront + Route53 alias, same setup as
+# asteroids/draken. Infra was created once by hand with the aws CLI
+# (bucket, distribution, DNS records); nothing here provisions it.
+BUCKET = snake.leinonen.ninja
+DISTRIBUTION_ID = E2STWWND9CA24G
 
-.PHONY: run open
+.PHONY: run open deploy
 run:
 	@echo "Serving http://localhost:$(PORT)"
 	@python3 -m http.server $(PORT)
 
 open:
 	@xdg-open http://localhost:$(PORT) 2>/dev/null || open http://localhost:$(PORT)
+
+deploy:
+	aws s3 sync . s3://$(BUCKET) --delete --exclude "*" --include "index.html"
+	aws cloudfront create-invalidation --distribution-id $(DISTRIBUTION_ID) --paths "/*" --no-cli-pager --query 'Invalidation.Status' --output text
