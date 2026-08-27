@@ -32,3 +32,7 @@ Web Audio chiptune, all synthesized in code.
 make run      # serve on http://localhost:8000
 make deploy   # sync to S3 + CloudFront invalidation
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
