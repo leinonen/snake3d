@@ -376,10 +376,10 @@ const postProg = program(`
     float r2 = dot(cc,cc);
     vec2 uv = vUv + (vUv-0.5)*r2*0.12;                       // barrel distortion
     uv += (vec2(hash(vec2(uTime,1.0)),hash(vec2(2.0,uTime)))-0.5)*0.03*uShake;
-    vec2 off = (vUv-0.5)*(0.008 + 0.03*uShake + 0.02*uSurge);  // chromatic aberration
+    vec2 off = (vUv-0.5)*(0.008 + 0.03*uShake + 0.008*uSurge);  // chromatic aberration
     vec4 g = texture2D(uTex,uv);
     if (uSurge > 0.001){                                       // radial blur on edge surge
-      vec2 dir = (0.5-uv)*0.06*uSurge;
+      vec2 dir = (0.5-uv)*0.025*uSurge;
       g = (g + texture2D(uTex,uv+dir) + texture2D(uTex,uv+dir*2.0) + texture2D(uTex,uv+dir*3.0) + texture2D(uTex,uv+dir*4.0))/5.0;
     }
     float r = texture2D(uTex,uv+off).r;
@@ -396,7 +396,7 @@ const postProg = program(`
     col += bl/tot*2.2;
     // background where nothing was drawn
     vec3 bg = mix(vec3(0.01,0.01,0.04), vec3(0.06,0.01,0.10), vUv.y+0.2*sin(uTime*0.3));
-    bg += starfield(cc, uStar)*(1.0+uSurge);
+    bg += starfield(cc, uStar)*(1.0+0.4*uSurge);
     col = mix(bg, col, g.a);
     col = mix(col, col.bgr*1.2, uGhost*(0.7+0.3*sin(uTime*8.0)));  // ghost mode tint
     col *= 0.90 + 0.10*sin(uv.y*uRes.y*1.6 + uTime*4.0);      // scanlines
@@ -572,9 +572,9 @@ function frame(now){
   if (hitStop > 0) hitStop -= dt;
   else if (alive && started){ tickAcc += dt*1000; const tm = tickMs*(slowT>0?2:1); while (tickAcc >= tm){ tickAcc -= tm; tick(); if(!alive) break; } }
   shake = Math.max(0, shake - dt*1.5);
-  surge = Math.max(0, surge - dt*3);
+  surge = Math.max(0, surge - dt*4);
   flash = Math.max(0, flash - dt*8);
-  starT += dt*(1 + 2.5*surge);
+  starT += dt*(1 + 1.2*surge);
   if (alive && started && hitStop <= 0){
     food.ttl -= dt;
     if (powerup && (powerup.ttl -= dt) <= 0) powerup = null;
@@ -612,7 +612,7 @@ function frame(now){
     R[0][1],R[1][1],R[2][1],0,
     R[0][2],R[1][2],R[2][2],0,
     Math.sin(t*0.7)*wob, Math.cos(t*0.9)*wob, -4.3, 1 ];
-  const proj = perspective((38 + 10*surge)*Math.PI/180, W/H, 0.1, 20);
+  const proj = perspective((38 + 4*surge)*Math.PI/180, W/H, 0.1, 20);
   const mvp = mul4(proj, view);
   const rot = [R[0][0],R[1][0],R[2][0], R[0][1],R[1][1],R[2][1], R[0][2],R[1][2],R[2][2]];
 
