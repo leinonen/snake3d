@@ -57,18 +57,20 @@ const key = s => s.f*N*N + s.j*N + s.i;
 let snake, dir, pendingDir, food, score, alive, tickAcc, tickMs, shake, started, best = 0;
 let combo, comboTimer, hitStop, surge, flash, starT = 0, foodCount;
 let rocks, lavaFace, lavaPhase, lavaT, lavaCd;
+let powerup, ghostT, slowT, effectLbl = '';
 function reset(){
   snake = [{f:0,i:5,j:5},{f:0,i:4,j:5},{f:0,i:3,j:5}];
   dir = [1,0,0]; pendingDir = null;
   score = 0; alive = true; tickAcc = 0; tickMs = 170; shake = 0; started = false;
   combo = 0; comboTimer = 0; hitStop = 0; surge = 0; flash = 0; foodCount = 0;
   rocks = []; lavaFace = -1; lavaPhase = null; lavaT = 0; lavaCd = 12; music.duck(false);
+  powerup = null; ghostT = 0; slowT = 0; effectLbl = ''; music.slow(false);
   spawnFood();
   targetQ = faceQ(0);
   hud();
 }
 function freeCell(excludeFaces){
-  const occ = new Set([...snake, ...rocks, ...(food?[food]:[])].map(key));
+  const occ = new Set([...snake, ...rocks, ...(food?[food]:[]), ...(powerup?[powerup]:[])].map(key));
   let c;
   do { c = { f:(Math.random()*6)|0, i:(Math.random()*N)|0, j:(Math.random()*N)|0 }; }
   while (occ.has(key(c)) || excludeFaces.includes(c.f));
@@ -78,7 +80,11 @@ function spawnFood(){
   const ex = lavaPhase ? [lavaFace] : [];
   food = freeCell(ex);
   food.ttl = food.ttl0 = Math.max(4, 9 - score*0.1);
+  if (!powerup && Math.random() < 0.2){
+    powerup = freeCell(ex); powerup.kind = ['ghost','shrink','slow'][(Math.random()*3)|0]; powerup.ttl = 8;
+  }
 }
+const PU_COL = { ghost:[0.3,1.0,1.0], shrink:[1.0,0.3,1.0], slow:[1.0,1.0,1.0] };
 function spawnRock(){
   if (rocks.length >= 24) return;
   const ex = [snake[0].f, faceOfNormal(dir)]; if (lavaPhase) ex.push(lavaFace);
@@ -94,7 +100,7 @@ function tick(){
   const body = eat ? snake : snake.slice(0,-1);
   const rockHit = rocks.some(r => key(r)===hk), lavaHit = lavaPhase==='active' && h.f===lavaFace;
   if (rockHit) sfx.rock();
-  if (body.some(s => key(s)===hk) || rockHit || lavaHit){ alive = false; shake = 1; hitStop = 0.15; sfx.die(); music.stop(); best = Math.max(best,score); hud(); return; }
+  if ((ghostT<=0 && body.some(s => key(s)===hk)) || rockHit || lavaHit){ alive = false; shake = 1; hitStop = 0.15; sfx.die(); music.stop(); best = Math.max(best,score); hud(); return; }
   if (h.f !== snake[0].f){ onFaceChange(snake[0].f, h.f); surge = 1; }
   snake.unshift(h);
   if (eat){
@@ -107,11 +113,17 @@ function tick(){
     tickMs = Math.max(70, 170 - foodCount*4); spawnFood();
   }
   else snake.pop();
+  if (powerup && key(powerup)===hk){
+    const k = powerup.kind; powerup = null; sfx.power(); hudPop();
+    if (k==='ghost') ghostT = 5;
+    else if (k==='shrink'){ snake.length = Math.max(3, Math.ceil(snake.length*0.7)); sfx.pop(); }
+    else { slowT = 4; music.slow(true); }
+  }
   hud();
 }
 function hudPop(){ const h=document.getElementById('hud'); h.classList.remove('pop'); void h.offsetWidth; h.classList.add('pop'); }
 function hud(){
-  document.getElementById('hud').textContent = `SCORE ${score}   BEST ${best}   LEN ${snake.length}` + (combo>1 ? `   x${combo}` : '');
+  document.getElementById('hud').textContent = `SCORE ${score}   BEST ${best}   LEN ${snake.length}` + (combo>1 ? `   x${combo}` : '') + (effectLbl ? `   ${effectLbl}` : '');
   document.getElementById('msg').textContent =
     !alive ? `GAME OVER\nscore ${score}\n\npress SPACE to restart` :
     lavaPhase==='warn' ? `!! FACE COLLAPSING !!` :
@@ -179,6 +191,8 @@ const sfx = {
   miss(){ tone(220,0.15,{type:'triangle',slide:0.6,vol:0.08}); },
   rock(){ tone(90,0.35,{type:'sawtooth',slide:0.4,vol:0.2}); },
   siren(){ for (let k=0;k<3;k++){ tone(880,0.22,{delay:k*0.5,type:'square',vol:0.07}); tone(660,0.22,{delay:k*0.5+0.25,type:'square',vol:0.07}); } },
+  power(){ [523,659,784,1047].forEach((f,i)=>tone(f,0.12,{delay:i*0.05,type:'square',vol:0.09})); },
+  pop(){ tone(300,0.12,{slide:0.3,type:'triangle',vol:0.12,delay:0.2}); },
   comboLost(){ tone(500,0.18,{type:'triangle',slide:0.5,vol:0.07}); },
   die(){ tone(400,0.6,{type:'sawtooth',slide:0.15,vol:0.18}); tone(200,0.8,{type:'square',slide:0.2,vol:0.1,delay:0.05}); },
 };
@@ -187,7 +201,7 @@ const sfx = {
 // ---------------------------------------------------------------- chiptune (SID-style: PWM pulse, 50Hz arps, filter sweep)
 const music = (() => {
   let bpm = 140, STEP = 60/bpm/4; const BARS = 8;
-  let level = 0, comboLvl = 0, fillSteps = 0, ducked = false;
+  let level = 0, comboLvl = 0, fillSteps = 0, ducked = false, slowed = false;
   const mtof = m => 440*Math.pow(2,(m-69)/12);
   const CHORD = [[57,60,64],[53,57,60],[60,64,67],[55,59,62],[57,60,64],[53,57,60],[50,53,57],[52,56,59]];
   const ROOT  = [45,41,48,43,45,41,38,40];
@@ -244,7 +258,7 @@ const music = (() => {
     if (fillSteps>0){ fillSteps--; drum(t0,'snare'); drum(t0,'kick'); }
     else { if (st===0||st===8) drum(t0,'kick'); if ((st===4||st===12) && level>=2) drum(t0,'snare'); if ((st&1) && level>=1) drum(t0,'hat'); }
     if (st===0 && !ducked){ const lo=900+400*comboLvl, hi=3200+400*comboLvl; filt.frequency.cancelScheduledValues(t0); filt.frequency.setValueAtTime(bar%2?lo:hi,t0); filt.frequency.exponentialRampToValueAtTime(bar%2?hi:lo,t0+STEP*16);
-      STEP = 60/bpm/4; }
+      STEP = 60/bpm/4*(slowed?2:1); }
   }
   function sched(){ while (nextT < actx.currentTime+0.2){ play(step,nextT); step=(step+1)%(16*BARS); nextT+=STEP; } }
   function start(){
@@ -252,7 +266,7 @@ const music = (() => {
     if (!noise){ noise=actx.createBuffer(1,actx.sampleRate*0.5,actx.sampleRate); const d=noise.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1; }
     master=actx.createGain(); master.gain.value = muted?0:0.4; master.connect(actx.destination);
     filt=actx.createBiquadFilter(); filt.type='lowpass'; filt.Q.value=3; filt.frequency.value=2000; filt.connect(master);
-    step=0; level=0; comboLvl=0; fillSteps=0; bpm=140; STEP=60/bpm/4; nextT=actx.currentTime+0.4; timer=setInterval(sched,40);
+    step=0; level=0; comboLvl=0; fillSteps=0; slowed=false; bpm=140; STEP=60/bpm/4; nextT=actx.currentTime+0.4; timer=setInterval(sched,40);
   }
   function stop(){
     if (!timer) return; clearInterval(timer); timer=null;
@@ -262,8 +276,9 @@ const music = (() => {
   function setIntensity(l){ level=l; bpm = 140 + 4*l; }
   function setCombo(c){ comboLvl = Math.min(c,6); }
   function fill(){ fillSteps = 4; }
+  function slow(on){ slowed = on; STEP = 60/bpm/4*(on?2:1); if (filt && actx && !ducked){ filt.frequency.cancelScheduledValues(actx.currentTime); filt.frequency.setTargetAtTime(on?600:2000, actx.currentTime, 0.1); } }
   function duck(on){ ducked = on; if (filt && actx){ filt.frequency.cancelScheduledValues(actx.currentTime); filt.frequency.setTargetAtTime(on?400:2000, actx.currentTime, 0.1); } }
-  return {start,stop,toggleMute,setIntensity,setCombo,fill,duck};
+  return {start,stop,toggleMute,setIntensity,setCombo,fill,duck,slow};
 })();
 
 // ---------------------------------------------------------------- input
@@ -328,7 +343,7 @@ const postProg = program(`
   void main(){ vUv = aPos*0.5+0.5; gl_Position = vec4(aPos,0.0,1.0); }
 `,`
   precision mediump float;
-  varying vec2 vUv; uniform sampler2D uTex; uniform vec2 uRes; uniform float uTime; uniform float uShake; uniform float uDead; uniform float uSurge; uniform float uStar;
+  varying vec2 vUv; uniform sampler2D uTex; uniform vec2 uRes; uniform float uTime; uniform float uShake; uniform float uDead; uniform float uSurge; uniform float uStar; uniform float uGhost;
   float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
   // warp starfield: 8 depth slices fly toward the camera; each star projected by 1/z
   vec3 starfield(vec2 p, float t){
@@ -381,6 +396,7 @@ const postProg = program(`
     vec3 bg = mix(vec3(0.01,0.01,0.04), vec3(0.06,0.01,0.10), vUv.y+0.2*sin(uTime*0.3));
     bg += starfield(cc, uStar)*(1.0+uSurge);
     col = mix(bg, col, g.a);
+    col = mix(col, col.bgr*1.2, uGhost*(0.7+0.3*sin(uTime*8.0)));  // ghost mode tint
     col *= 0.90 + 0.10*sin(uv.y*uRes.y*1.6 + uTime*4.0);      // scanlines
     col *= 1.0 - 0.55*r2;                                      // vignette
     col += (hash(vUv*uTime)-0.5)*0.03;                         // grain
@@ -492,7 +508,8 @@ function buildScene(t){
   const L = snake.length, H = 0.05, inset = 0.28;
   snake.forEach((s,k) => {
     const g = k/Math.max(L-1,1);
-    const col = k===0 ? [0.6,1.0,0.7] : [0.1+0.15*g, 0.95-0.5*g, 0.35+0.4*g];
+    let col = k===0 ? [0.6,1.0,0.7] : [0.1+0.15*g, 0.95-0.5*g, 0.35+0.4*g];
+    if (ghostT>0 && k>0) col = col.map(x=>x*0.5);
     const nb = {px:null,nx:null,py:null,ny:null};
     for (const o of [snake[k-1], snake[k+1]]){
       if (!o) continue;
@@ -511,6 +528,11 @@ function buildScene(t){
     }
   }
   const pulse = 0.5+0.5*Math.sin(t*6);
+  if (powerup){
+    const pc = PU_COL[powerup.kind], sp = 0.5+0.5*Math.sin(t*9);
+    const blink = powerup.ttl < 2 && (Math.floor(powerup.ttl*6)&1);
+    if (!blink) blob(powerup.f,powerup.i,powerup.j,{px:null,nx:null,py:null,ny:null}, 0.45-0.1*sp, 0.09, pc.map(x=>x*(0.7+0.3*sp)));
+  }
   const urgent = food.ttl < 2.5;
   if (!urgent || (Math.floor(food.ttl*6)&1)===0)
     blob(food.f,food.i,food.j,{px:null,nx:null,py:null,ny:null}, 0.42-0.08*pulse, 0.06+0.02*pulse,
@@ -536,7 +558,7 @@ const U = {
   mvp: gl.getUniformLocation(sceneProg,'uMVP'), rot: gl.getUniformLocation(sceneProg,'uRot'), stime: gl.getUniformLocation(sceneProg,'uTime'),
   tex: gl.getUniformLocation(postProg,'uTex'), res: gl.getUniformLocation(postProg,'uRes'),
   time: gl.getUniformLocation(postProg,'uTime'), shake: gl.getUniformLocation(postProg,'uShake'), dead: gl.getUniformLocation(postProg,'uDead'),
-  surge: gl.getUniformLocation(postProg,'uSurge'), star: gl.getUniformLocation(postProg,'uStar'),
+  surge: gl.getUniformLocation(postProg,'uSurge'), star: gl.getUniformLocation(postProg,'uStar'), ghost: gl.getUniformLocation(postProg,'uGhost'),
 };
 
 let last = performance.now();
@@ -546,13 +568,18 @@ function frame(now){
   resize();
 
   if (hitStop > 0) hitStop -= dt;
-  else if (alive && started){ tickAcc += dt*1000; while (tickAcc >= tickMs){ tickAcc -= tickMs; tick(); if(!alive) break; } }
+  else if (alive && started){ tickAcc += dt*1000; const tm = tickMs*(slowT>0?2:1); while (tickAcc >= tm){ tickAcc -= tm; tick(); if(!alive) break; } }
   shake = Math.max(0, shake - dt*1.5);
   surge = Math.max(0, surge - dt*3);
   flash = Math.max(0, flash - dt*8);
   starT += dt*(1 + 2.5*surge);
   if (alive && started && hitStop <= 0){
     food.ttl -= dt;
+    if (powerup && (powerup.ttl -= dt) <= 0) powerup = null;
+    if (ghostT > 0) ghostT -= dt;
+    if (slowT > 0 && (slowT -= dt) <= 0) music.slow(false);
+    const lbl = ghostT>0 ? `GHOST ${Math.ceil(ghostT)}` : slowT>0 ? `SLOW ${Math.ceil(slowT)}` : '';
+    if (lbl !== effectLbl){ effectLbl = lbl; hud(); }
     if (food.ttl <= 0){ spawnFood(); sfx.miss(); if (combo>1){ combo=0; comboTimer=0; hud(); } }
     if (!lavaPhase){
       if (score >= 8){ lavaCd -= dt; if (lavaCd <= 0){
@@ -609,7 +636,7 @@ function frame(now){
   gl.useProgram(postProg);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, fboTex);
   gl.uniform1i(U.tex,0); gl.uniform2f(U.res,W,H); gl.uniform1f(U.time,t);
-  gl.uniform1f(U.shake,shake); gl.uniform1f(U.dead, alive?0:1); gl.uniform1f(U.surge,surge); gl.uniform1f(U.star,starT);
+  gl.uniform1f(U.shake,shake); gl.uniform1f(U.dead, alive?0:1); gl.uniform1f(U.surge,surge); gl.uniform1f(U.star,starT); gl.uniform1f(U.ghost, ghostT>0 ? Math.min(1, ghostT*3) : 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, quadVbo);
   gl.enableVertexAttribArray(A.qpos); gl.vertexAttribPointer(A.qpos,2,gl.FLOAT,false,0,0);
   gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
