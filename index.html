@@ -304,6 +304,14 @@ function blob(f,i,j,nb,inset,H,col){
     if (free.x[sx] && free.y[sy]){
       const r = Math.min(ex[sx],ey[sy])*0.9, cx = sx*(ex[sx]-r), cy = sy*(ey[sy]-r), K=6;
       for (let k=0;k<=K;k++){ const an=(a0+k*90/K)*Math.PI/180; P.push([cx+r*Math.cos(an), cy+r*Math.sin(an)]); }
+    } else if (!free.x[sx] && !free.y[sy]){
+      // inner corner of a bend: notch back to tube width with a concave fillet
+      const wx = h*(1-inset), wy = h*(1-inset), ri = Math.min(wx,wy)*0.35, K=4;
+      const pts = [[ex[sx], wy]];
+      for (let k=0;k<=K;k++){ const an=(270-k*90/K)*Math.PI/180; pts.push([wx+ri+ri*Math.cos(an), wy+ri+ri*Math.sin(an)]); }
+      pts.push([wx, ey[sy]]);
+      if (sx*sy<0) pts.reverse();
+      for (const q of pts) P.push([sx*q[0], sy*q[1]]);
     } else P.push([sx*ex[sx], sy*ey[sy]]);
   }
   const M = P.length;
