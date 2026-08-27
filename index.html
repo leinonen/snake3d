@@ -59,6 +59,7 @@ function reset(){
   dir = [1,0,0]; pendingDir = null;
   score = 0; alive = true; tickAcc = 0; tickMs = 170; shake = 0; started = false;
   spawnFood();
+  targetQ = faceQ(0);
   hud();
 }
 function spawnFood(){
@@ -75,6 +76,7 @@ function tick(){
   const eat = hk === key(food);
   const body = eat ? snake : snake.slice(0,-1);
   if (body.some(s => key(s)===hk)){ alive = false; shake = 1; sfx.die(); best = Math.max(best,score); hud(); return; }
+  if (h.f !== snake[0].f) onFaceChange(snake[0].f, h.f);
   snake.unshift(h);
   if (eat){ score++; sfx.eat(); tickMs = Math.max(70, 170 - score*4); spawnFood(); }
   else snake.pop();
@@ -109,7 +111,23 @@ function slerp(a,b,t){
   const th=Math.acos(d), s=Math.sin(th), wa=Math.sin((1-t)*th)/s, wb=Math.sin(t*th)/s;
   return a.map((x,i)=>x*wa+b[i]*wb);
 }
-let camQ = mat3ToQuat([FACES[0].u, FACES[0].v, FACES[0].n]);
+const qmul = (a,b) => [
+  a[3]*b[0] + a[0]*b[3] + a[1]*b[2] - a[2]*b[1],
+  a[3]*b[1] - a[0]*b[2] + a[1]*b[3] + a[2]*b[0],
+  a[3]*b[2] + a[0]*b[1] - a[1]*b[0] + a[2]*b[3],
+  a[3]*b[3] - a[0]*b[0] - a[1]*b[1] - a[2]*b[2]];
+const qconj = q => [-q[0],-q[1],-q[2],q[3]];
+const qaxis = (ax,ang) => { const h=ang/2, sn=Math.sin(h); return [ax[0]*sn,ax[1]*sn,ax[2]*sn,Math.cos(h)]; };
+const cross = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const faceQ = f => mat3ToQuat([FACES[f].u, FACES[f].v, FACES[f].n]);
+let camQ = faceQ(0), targetQ = faceQ(0);
+// on a face change, roll the target 90 degrees over the shared edge so screen-up stays continuous
+function onFaceChange(fOld, fNew){
+  const a = FACES[fOld].n, b = FACES[fNew].n;
+  const r = qaxis(cross(a,b), Math.PI/2);          // world rotation taking n_old -> n_new
+  targetQ = qmul(targetQ, qconj(r));
+  const l = Math.hypot(...targetQ); targetQ = targetQ.map(x=>x/l);
+}
 
 // ---------------------------------------------------------------- audio (Web Audio synth, no assets)
 let actx = null;
@@ -401,9 +419,7 @@ function frame(now){
   shake = Math.max(0, shake - dt*1.5);
 
   // camera: slerp toward the face the head is on
-  const F = FACES[snake[0].f];
-  const target = mat3ToQuat([F.u,F.v,F.n]);
-  camQ = slerp(camQ, target, 1 - Math.exp(-dt*5));
+  camQ = slerp(camQ, targetQ, 1 - Math.exp(-dt*5));
   const R = quatToMat3(camQ);
   // slight idle wobble
   const wob = alive ? 0.03 : 0.0;
