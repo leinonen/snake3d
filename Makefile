@@ -1,7 +1,7 @@
 PORT ?= 8000
-# Static site on S3 website bucket + CloudFront + Route53 alias, same setup as
-# asteroids/draken. Infra was created once by hand with the aws CLI
-# (bucket, distribution, DNS records); nothing here provisions it.
+# Static site: private S3 bucket + CloudFront. Bucket, distribution and DNS live
+# in github.com/leinonen/infrastructure. Pushes to main deploy via
+# .github/workflows/deploy.yml.
 BUCKET = snake.leinonen.ninja
 DISTRIBUTION_ID = E2STWWND9CA24G
 
